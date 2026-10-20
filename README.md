@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.svg" alt="FireFrontend: A lightweight, customizable launcher for Fire TV." width="720">
+</p>
+
 # FireFrontend
 An open-source, lightweight alternative home screen for Amazon Fire TV devices.
 
