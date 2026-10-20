@@ -1,0 +1,7 @@
+<resources>
+    <color name="bg">#FF0F1115</color>
+    <color name="tile">#FF1C1F26</color>
+    <color name="text">#FFECEEF2</color>
+    <color name="text_dim">#FF8A90A0</color>
+    <color name="focus">#FFFF8A1F</color>
+</resources>
