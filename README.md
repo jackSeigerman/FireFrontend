@@ -11,7 +11,7 @@ No ads, no sponsored rows, just your apps, a clock and the weather, in a clean "
 - **Ambient home** - large clock, date and live weather (rain, storms, snow, fog, sun and moon) over a sky that follows the time of day.
 - **App showcase** - moving through apps tints the screen with each app's colors and shows when you last opened it.
 - **Home button** - pressing Home brings you back to FireFrontend.
-- **Tiny** - about 70 KB, built for 1 GB Fire TV Sticks.
+- **Tiny** - under 100 KB, built for 1 GB Fire TV Sticks.
 
 
 ## Install
@@ -57,28 +57,64 @@ The installer will:
 
 That's it. You can turn ADB debugging back off if you like — FireFrontend keeps working. To update later, run the same installer command again.
 
+If the installer says Fire OS hasn't started the Home button service yet, restart your Fire TV (**Settings > My Fire TV > Restart**). Home still works in the meantime, just more slowly.
+
 ### About the Home button
 
-Fire OS always sends the Home button to Amazon's home screen first; FireFrontend notices and brings itself back. The installer turns on two ways of doing this, and whichever works on your Fire TV wins:
+Fire OS normally sends the Home button straight to Amazon's home screen. The installer turns on two ways for FireFrontend to take it back:
 
-- **Accessibility service** (the same approach as Projectivy and Home on Fire). On **Fire OS 8** Home returns to FireFrontend almost instantly. On **Fire OS 7** and older, Fire OS holds app switches for up to ~5 seconds after Home; during that wait FireFrontend covers Amazon's screen with a loading skeleton of its own home instead of showing Amazon's.
-- **Usage watcher** — a fallback for firmware that doesn't deliver accessibility events. Amazon's screen shows during the wait.
+- **Accessibility service** (like Button Mapper and Projectivy). It catches the Home button before Fire OS acts on it and opens FireFrontend, so Amazon's screen shows for a second or less, if at all. If Amazon's home ever does open, it covers it with a loading skeleton of FireFrontend's home until FireFrontend is back.
+- **Usage watcher**: a fallback for when the accessibility service is off. It notices Amazon's home and brings FireFrontend back, but on Fire OS 7 Amazon's screen shows for about 5 seconds first.
 
-FireFrontend's accessibility service only watches for Amazon's home screen opening; it doesn't read anything on screen. Some people report that while *any* accessibility service is on, Prime Video doesn't auto-hide its playback controls. To install without it, set `FIREFRONTEND_NO_ACCESSIBILITY=1` before running the installer.
+The accessibility service only looks at the Home button (every other button passes straight through) and at whether Amazon's home has opened. It doesn't read anything on screen. Fire OS doesn't list it in its Accessibility settings, which is why it's turned on over ADB. Some people report that while *any* accessibility service is on, Prime Video doesn't auto-hide its playback controls. To install without it, set `FIREFRONTEND_NO_ACCESSIBILITY=1` before running the installer.
 
-To turn the Home redirect off, run these from the `platform-tools` folder the installer downloaded (or anywhere `adb` works). The second removes all accessibility services, so if you use others, set the list to just those instead:
+### Doing it by hand
+
+Run these from the `platform-tools` folder the installer downloaded (`%LOCALAPPDATA%\FireFrontend\platform-tools` on Windows, `~/.firefrontend/platform-tools` on Mac and Linux), or anywhere `adb` works. On Windows PowerShell, write `.\adb` instead of `adb`. Connect first, replacing the IP with your Fire TV's:
 
 ```bash
-adb shell appops set dev.firefrontend GET_USAGE_STATS deny
+adb connect 192.168.1.50:5555
 ```
+
+Turn on the accessibility Home redirect. This replaces any other accessibility services you have on; to keep them, run `adb shell settings get secure enabled_accessibility_services` first and add FireFrontend's to that list, separated by `:`.
+
+```bash
+adb shell settings put secure enabled_accessibility_services dev.firefrontend/dev.firefrontend.HomeRedirectService
+```
+
+```bash
+adb shell settings put secure accessibility_enabled 1
+```
+
+Turn on the usage-watcher fallback:
+
+```bash
+adb shell appops set dev.firefrontend GET_USAGE_STATS allow
+```
+
+To turn the Home redirect off again, set the accessibility list to `null` (or to your other services) and deny usage access:
 
 ```bash
 adb shell settings put secure enabled_accessibility_services null
 ```
 
+```bash
+adb shell appops set dev.firefrontend GET_USAGE_STATS deny
+```
+
 ### Uninstall
 
-**Settings > Applications > Manage Installed Applications > FireFrontend > Uninstall.** Your Fire TV goes straight back to normal.
+On the TV: **Settings > Applications > Manage Installed Applications > FireFrontend > Uninstall.** Your Fire TV goes straight back to normal.
+
+Or from your computer (connected as above), turn off the Home redirect, then remove the app:
+
+```bash
+adb shell settings put secure enabled_accessibility_services null
+```
+
+```bash
+adb uninstall dev.firefrontend
+```
 
 
 ## Device Compatibility
