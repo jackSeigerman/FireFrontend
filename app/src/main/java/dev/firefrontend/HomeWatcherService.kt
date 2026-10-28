@@ -10,6 +10,7 @@ import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -18,14 +19,15 @@ import android.os.PowerManager
 import android.os.Process
 
 /**
- * Fire OS always routes the Home button to Amazon's launcher, and blocks both accessibility events and
- * the "homekey" broadcast for third-party apps. This service polls recent usage events instead and
- * brings FireFrontend up whenever Amazon's home activity comes to the front.
+ * Fallback Home redirect. Fire OS always routes the Home button to Amazon's launcher, and some
+ * firmware withholds accessibility events from [HomeRedirectService]. This service polls recent usage
+ * events instead and brings FireFrontend up whenever Amazon's home activity comes to the front.
  *
  * Needs usage access, granted once over adb:
  *   adb shell appops set dev.firefrontend GET_USAGE_STATS allow
  *
  * Kept separate from the launcher itself: if a firmware update breaks this, the launcher still works.
+ * See [HomeRedirect] for how it shares the job with the accessibility service.
  */
 class HomeWatcherService : Service() {
 
@@ -46,7 +48,11 @@ class HomeWatcherService : Service() {
         usage = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         power = getSystemService(Context.POWER_SERVICE) as PowerManager
         lastHandled = System.currentTimeMillis()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         handler.post(poll)
     }
 
@@ -67,19 +73,14 @@ class HomeWatcherService : Service() {
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             if (event.eventType != UsageEvents.Event.MOVE_TO_FOREGROUND || event.timeStamp <= lastHandled) continue
-            amazonHomeAt = if (isAmazonHome(event)) event.timeStamp else 0L
+            amazonHomeAt = if (HomeRedirect.isAmazonHome(event.packageName, event.className)) event.timeStamp else 0L
         }
         // Only redirect if Amazon's home is the most recent thing to come to the front.
         if (amazonHomeAt == 0L) return
         lastHandled = amazonHomeAt
-        startActivity(
-            Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        )
+        // The accessibility service usually gets there first; don't launch twice.
+        if (HomeRedirect.claim()) HomeRedirect.launch(this)
     }
-
-    private fun isAmazonHome(event: UsageEvents.Event) =
-        event.packageName in AMAZON_HOME_PACKAGES && event.className?.contains("HomeActivity") == true
 
     @Suppress("DEPRECATION")
     private fun buildNotification(): Notification {
@@ -104,9 +105,9 @@ class HomeWatcherService : Service() {
     }
 
     companion object {
-        private val AMAZON_HOME_PACKAGES = setOf("com.amazon.tv.launcher", "com.amazon.firehomestarter")
-        private const val POLL_MS = 400L
-        private const val LOOKBACK_MS = 5_000L
+        // Fire OS 7's hold is often shorter than its 5 s maximum, so noticing Home sooner matters.
+        private const val POLL_MS = 250L
+        private const val LOOKBACK_MS = 3_000L
         private const val CHANNEL_ID = "home_watcher"
         private const val NOTIFICATION_ID = 1
 

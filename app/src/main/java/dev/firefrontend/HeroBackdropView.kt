@@ -35,7 +35,9 @@ class HeroBackdropView @JvmOverloads constructor(
     private val scrimPaint = Paint()
     private val sidePaint = Paint()
     private val matrix = Matrix()
-    private val baseColor = context.getColor(R.color.bg)
+    // Context.getColor is API 23; Fire OS 5 is API 22.
+    @Suppress("DEPRECATION")
+    private val baseColor = context.resources.getColor(R.color.bg)
 
     private val animator = ValueAnimator.ofFloat(0f, 1f).apply {
         duration = 450

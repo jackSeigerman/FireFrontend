@@ -98,10 +98,52 @@ class WeatherRepository(context: Context) {
             .apply()
     }
 
-    /** Network call: looks up a city name or postal code. */
+    /**
+     * Network call: looks up a city name or postal code.
+     *
+     * UK postcodes go to postcodes.io (Open-Meteo doesn't know them). Everything
+     * else tries Open-Meteo first, then OpenStreetMap, which covers most other
+     * countries' postcodes.
+     */
     fun geocode(query: String): Place? {
+        val q = query.trim()
+        if (q.isEmpty()) return null
+        val ukCode = q.uppercase().replace(Regex("\\s+"), "")
+        if (UK_FULL_POSTCODE.matches(ukCode) || UK_OUTWARD_CODE.matches(ukCode)) {
+            ukPostcode(ukCode)?.let { return it }
+        }
+        return openMeteo(q) ?: openStreetMap(q)
+    }
+
+    private fun ukPostcode(code: String): Place? = try {
+        val full = UK_FULL_POSTCODE.matches(code)
+        val url = if (full) "https://api.postcodes.io/postcodes/$code" else "https://api.postcodes.io/outcodes/$code"
+        val r = JSONObject(get(url)).getJSONObject("result")
+        val area = if (full) r.optString("admin_district") else r.optJSONArray("admin_district")?.optString(0)
+        val label = if (full) r.getString("postcode") else r.getString("outcode")
+        Place(listOfNotNull(area?.takeIf { it.isNotBlank() }, label).joinToString(", "), r.getDouble("latitude"), r.getDouble("longitude"))
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun openStreetMap(query: String): Place? = try {
+        val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=" + URLEncoder.encode(query, "UTF-8")
+        // Nominatim's usage policy asks every client to identify itself.
+        val results = org.json.JSONArray(get(url, userAgent = USER_AGENT))
+        if (results.length() == 0) {
+            null
+        } else {
+            val r = results.getJSONObject(0)
+            val name = r.getString("display_name").split(", ").take(2).joinToString(", ")
+            Place(name, r.getString("lat").toDouble(), r.getString("lon").toDouble())
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun openMeteo(query: String): Place? {
         val url = "https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" +
-            URLEncoder.encode(query.trim(), "UTF-8")
+            URLEncoder.encode(query, "UTF-8")
         val results = JSONObject(get(url)).optJSONArray("results") ?: return null
         if (results.length() == 0) return null
         val r = results.getJSONObject(0)
@@ -162,8 +204,9 @@ class WeatherRepository(context: Context) {
         return "${value.roundToInt()}°"
     }
 
-    private fun get(url: String): String {
+    private fun get(url: String, userAgent: String? = null): String {
         val conn = URL(url).openConnection() as HttpURLConnection
+        userAgent?.let { conn.setRequestProperty("User-Agent", it) }
         conn.connectTimeout = TIMEOUT_MS
         conn.readTimeout = TIMEOUT_MS
         try {
@@ -182,5 +225,9 @@ class WeatherRepository(context: Context) {
         const val STALE_MS = 30 * 60 * 1000L
         const val TIMEOUT_MS = 8000
         val FAHRENHEIT_COUNTRIES = setOf("US", "LR", "MM", "BS", "BZ", "KY", "PW")
+        // Spaces removed and uppercased before matching: "SW1A 1AA" → "SW1A1AA", "M1" → outward code only.
+        val UK_FULL_POSTCODE = Regex("^[A-Z]{1,2}\\d[A-Z\\d]?\\d[A-Z]{2}$")
+        val UK_OUTWARD_CODE = Regex("^[A-Z]{1,2}\\d[A-Z\\d]?$")
+        const val USER_AGENT = "FireFrontend/0.1 (+https://github.com/jackSeigerman/FireFrontend)"
     }
 }

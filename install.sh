@@ -82,10 +82,32 @@ echo "$out" | grep -q Success || fail "Install failed: $out"
 echo "Installed."
 
 # 4. Home button
+# Two layers: the accessibility service (instant on Fire OS 8, covers the wait on Fire OS 7) and the
+# usage-stats watcher (fallback for firmware that withholds accessibility events).
 step "Turning on the Home button redirect"
 "$ADB" -s "$ip" shell appops set dev.firefrontend GET_USAGE_STATS allow >/dev/null
+if [ "${FIREFRONTEND_NO_ACCESSIBILITY:-}" != "1" ]; then
+  service="dev.firefrontend/dev.firefrontend.HomeRedirectService"
+  current="$("$ADB" -s "$ip" shell settings get secure enabled_accessibility_services | tr -d '\r\n')"
+  # Keep any accessibility services that are already on; just add ours.
+  case ":$current:" in
+    ::|:null:) updated="$service" ;;
+    *":$service:"*) updated="$current" ;;
+    *) updated="$current:$service" ;;
+  esac
+  # Off then on, so Fire OS rereads the service's settings after an update.
+  without="$(echo ":$updated:" | sed "s#:$service:#:#; s#^:##; s#:\$##")"
+  "$ADB" -s "$ip" shell settings put secure enabled_accessibility_services "${without:-null}" >/dev/null
+  sleep 1
+  "$ADB" -s "$ip" shell settings put secure enabled_accessibility_services "$updated" >/dev/null
+  "$ADB" -s "$ip" shell settings put secure accessibility_enabled 1 >/dev/null
+  sleep 3
+  if ! "$ADB" -s "$ip" shell dumpsys accessibility | grep -q "FireFrontend"; then
+    printf '\033[33mFire OS hasn'"'"'t started the Home button service yet. Restart your Fire TV to finish\n(Settings > My Fire TV > Restart). Home still works in the meantime, just more slowly.\033[0m\n'
+  fi
+fi
 "$ADB" -s "$ip" shell am start -n dev.firefrontend/.MainActivity >/dev/null
 
 printf '\n\033[32mDone! FireFrontend is open on your TV.\033[0m\n'
-echo "Pressing Home now returns to FireFrontend after about 5 seconds (a Fire OS limit)."
+echo "Pressing Home now returns to FireFrontend: almost instantly on Fire OS 8, after a short wait on older Fire OS."
 echo "Set your city for weather in FireFrontend > Settings."

@@ -82,10 +82,32 @@ if ($out -notmatch 'Success') { Fail "Install failed:`n$out" }
 Write-Host 'Installed.' -ForegroundColor Green
 
 # 4. Home button
+# Two layers: the accessibility service (instant on Fire OS 8, covers the wait on Fire OS 7) and the
+# usage-stats watcher (fallback for firmware that withholds accessibility events).
 Step 'Turning on the Home button redirect'
 & $adb -s $ip shell appops set dev.firefrontend GET_USAGE_STATS allow | Out-Null
+if ($env:FIREFRONTEND_NO_ACCESSIBILITY -ne '1') {
+    $service = 'dev.firefrontend/dev.firefrontend.HomeRedirectService'
+    $current = ((& $adb -s $ip shell settings get secure enabled_accessibility_services) -join '').Trim()
+    # Keep any accessibility services that are already on; just add ours.
+    if (-not $current -or $current -eq 'null') { $updated = $service }
+    elseif ($current.Split(':') -contains $service) { $updated = $current }
+    else { $updated = "${current}:$service" }
+    # Off then on, so Fire OS rereads the service's settings after an update.
+    $without = ($updated.Split(':') | Where-Object { $_ -and $_ -ne $service }) -join ':'
+    if (-not $without) { $without = 'null' }
+    & $adb -s $ip shell settings put secure enabled_accessibility_services $without | Out-Null
+    Start-Sleep -Seconds 1
+    & $adb -s $ip shell settings put secure enabled_accessibility_services $updated | Out-Null
+    & $adb -s $ip shell settings put secure accessibility_enabled 1 | Out-Null
+    Start-Sleep -Seconds 3
+    if (((& $adb -s $ip shell dumpsys accessibility) -join "`n") -notmatch 'FireFrontend') {
+        Write-Host "Fire OS hasn't started the Home button service yet. Restart your Fire TV to finish" -ForegroundColor Yellow
+        Write-Host '(Settings > My Fire TV > Restart). Home still works in the meantime, just more slowly.' -ForegroundColor Yellow
+    }
+}
 & $adb -s $ip shell am start -n dev.firefrontend/.MainActivity | Out-Null
 
 Write-Host "`nDone! FireFrontend is open on your TV." -ForegroundColor Green
-Write-Host 'Pressing Home now returns to FireFrontend after about 5 seconds (a Fire OS limit).'
+Write-Host 'Pressing Home now returns to FireFrontend: almost instantly on Fire OS 8, after a short wait on older Fire OS.'
 Write-Host 'Set your city for weather in FireFrontend > Settings.'

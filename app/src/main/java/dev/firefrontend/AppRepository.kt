@@ -18,7 +18,7 @@ data class AppEntry(
     val accent: Int = 0,
 )
 
-/** Discovers launchable apps (Leanback + regular launcher) and tracks which ones the user hid. */
+/** Discovers launchable apps (Leanback + regular launcher) and tracks the user's order and hidden apps. */
 class AppRepository(private val context: Context) {
 
     private val pm: PackageManager = context.packageManager
@@ -53,7 +53,27 @@ class AppRepository(private val context: Context) {
                 backdrop = backdrop,
                 accent = backdrop?.let { HeroArt.accent(it) } ?: 0,
             )
-        }.sortedBy { it.label.lowercase() }
+        }.let(::applyOrder)
+    }
+
+    /** The user's saved order first; apps they haven't placed yet follow alphabetically. */
+    private fun applyOrder(apps: List<AppEntry>): List<AppEntry> {
+        val rank = order().withIndex().associate { (i, pkg) -> pkg to i }
+        return apps.sortedWith(
+            compareBy<AppEntry> { rank[it.packageName] ?: Int.MAX_VALUE }.thenBy { it.label.lowercase() }
+        )
+    }
+
+    private fun order(): List<String> =
+        prefs.getString(KEY_ORDER, null)?.split('\n')?.filter { it.isNotEmpty() } ?: emptyList()
+
+    /**
+     * Saves [visible] (the home screen's current order). Packages not in it — hidden
+     * or uninstalled apps — keep their old relative order after it.
+     */
+    fun saveOrder(visible: List<String>) {
+        val rest = order().filter { it !in visible }
+        prefs.edit().putString(KEY_ORDER, (visible + rest).joinToString("\n")).apply()
     }
 
     /** Last time each package was in the foreground, from usage access (empty if not granted). */
@@ -82,5 +102,6 @@ class AppRepository(private val context: Context) {
 
     private companion object {
         const val KEY_HIDDEN = "hidden_packages"
+        const val KEY_ORDER = "app_order"
     }
 }

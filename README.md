@@ -53,18 +53,27 @@ The installer will:
 ### 4. Finish on the TV
 
 - Open **Settings** in FireFrontend (top right) and enter your city or ZIP code for weather.
-- Hold **OK** (or press **Menu**) on any app to hide it. **Manage apps** brings hidden apps back.
+- Hold **OK** (or press **Menu**) on any app to **Move** it (use the arrows, then **OK** to place), **Move to front**, or hide it. **Manage apps** brings hidden apps back.
 
 That's it. You can turn ADB debugging back off if you like — FireFrontend keeps working. To update later, run the same installer command again.
 
 ### About the Home button
 
-Fire OS always sends the Home button to Amazon's home screen first. FireFrontend notices and brings itself back, but Fire OS holds app switches for about **5 seconds** after Home is pressed, so you'll briefly see Amazon's screen. There's no way around this without rooting the device.
+Fire OS always sends the Home button to Amazon's home screen first; FireFrontend notices and brings itself back. The installer turns on two ways of doing this, and whichever works on your Fire TV wins:
 
-To turn the Home redirect off, run this from the `platform-tools` folder the installer downloaded (or anywhere `adb` works):
+- **Accessibility service** (the same approach as Projectivy and Home on Fire). On **Fire OS 8** Home returns to FireFrontend almost instantly. On **Fire OS 7** and older, Fire OS holds app switches for up to ~5 seconds after Home; during that wait FireFrontend covers Amazon's screen with a loading skeleton of its own home instead of showing Amazon's.
+- **Usage watcher** — a fallback for firmware that doesn't deliver accessibility events. Amazon's screen shows during the wait.
+
+FireFrontend's accessibility service only watches for Amazon's home screen opening; it doesn't read anything on screen. Some people report that while *any* accessibility service is on, Prime Video doesn't auto-hide its playback controls. To install without it, set `FIREFRONTEND_NO_ACCESSIBILITY=1` before running the installer.
+
+To turn the Home redirect off, run these from the `platform-tools` folder the installer downloaded (or anywhere `adb` works). The second removes all accessibility services, so if you use others, set the list to just those instead:
 
 ```bash
 adb shell appops set dev.firefrontend GET_USAGE_STATS deny
+```
+
+```bash
+adb shell settings put secure enabled_accessibility_services null
 ```
 
 ### Uninstall
@@ -104,7 +113,7 @@ Navigate to **Settings > My Fire TV > About** to identify your Fire TV model and
 
 ## Privacy
 
-FireFrontend has no accounts, ads or analytics. The only network requests are to [Open-Meteo](https://open-meteo.com) for weather (your city's coordinates, about every 30 minutes) — and only once you've set a city. App usage history used for "Last opened" stays on the device.
+FireFrontend has no accounts, ads or analytics. The only network requests are to [Open-Meteo](https://open-meteo.com) for weather (your city's coordinates, about every 30 minutes) — and only once you've set a city. When you save a location, it's looked up once with Open-Meteo, [postcodes.io](https://postcodes.io) (UK postcodes) or [OpenStreetMap](https://nominatim.openstreetmap.org) (other postcodes). App usage history used for "Last opened" stays on the device.
 
 
 ## Development

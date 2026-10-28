@@ -51,7 +51,7 @@
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1.25">
+            android:layout_weight="0.95">
 
             <LinearLayout
                 android:id="@+id/ambient_hero"
@@ -202,7 +202,7 @@
             android:visibility="gone" />
 
         <!-- App grid -->
-        <GridView
+        <dev.firefrontend.FadingGridView
             android:id="@+id/grid"
             android:layout_width="match_parent"
             android:layout_height="0dp"

@@ -1,5 +1,7 @@
 package dev.firefrontend
 
+import android.graphics.drawable.Drawable
+import android.graphics.Rect
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
@@ -51,10 +53,14 @@ class MainActivity : Activity() {
     private var currentWeather: WeatherRepository.Current? = null
     private var focusedTile: View? = null
     private var firstLoad = true
+    private var resetSelection = false
 
     /** The ambient hero shows until the user actually moves through the apps. */
     private var showingApp = false
     private var userNavigated = false
+
+    /** Grid position of the app being moved, or -1 when not moving one. */
+    private var movingIndex = -1
 
     private val idleToAmbient = Runnable { showAmbient() }
     private val periodic = object : Runnable {
@@ -95,6 +101,12 @@ class MainActivity : Activity() {
         appBanner.clipToOutline = true
 
         grid.adapter = adapter
+        // The grid doesn't clip so focused tiles can grow past its sides, but rows scrolled off its
+        // top would then draw over the hero. Clip the top edge only.
+        grid.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            val overflow = (48 * density).toInt()
+            v.clipBounds = Rect(-overflow, 0, v.width + overflow, v.height + overflow)
+        }
         grid.setOnItemClickListener { _, _, position, _ -> launch(adapter.getItem(position)) }
         grid.setOnItemLongClickListener { _, _, position, _ ->
             showAppMenu(adapter.getItem(position)); true
@@ -135,14 +147,22 @@ class MainActivity : Activity() {
         super.onResume()
         // On resume rather than create: usage access may have been granted while we were in the background.
         HomeWatcherService.start(this)
+        // Back in front: drop the cover the Home redirect may have put over Amazon's screen.
+        HomeRedirectService.onHomeShown()
         userNavigated = false
         bindWeather(debugWeather() ?: weather.cached())
         showAmbient(immediate = true)
+        // The ambient hero goes with the top of the grid: coming back to the old selection, maybe
+        // rows down, would leave it highlighted under the weather instead of its own hero.
+        resetSelection = true
+        if (adapter.count > 0) grid.setSelection(0)
         reload()
         handler.post(periodic)
     }
 
     override fun onPause() {
+        // Leaving mid-move (Home, an app opening) keeps where the app was put.
+        if (movingIndex >= 0) finishMove()
         handler.removeCallbacks(periodic)
         handler.removeCallbacks(idleToAmbient)
         super.onPause()
@@ -162,6 +182,7 @@ class MainActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (movingIndex >= 0 && handleMoveKey(event)) return true
         if (event.action == KeyEvent.ACTION_DOWN) {
             handler.removeCallbacks(idleToAmbient)
             handler.postDelayed(idleToAmbient, IDLE_MS)
@@ -191,6 +212,9 @@ class MainActivity : Activity() {
 
     private fun showAmbient(immediate: Boolean = false) {
         showingApp = false
+        // Back to the top of the grid with the weather, so the first row isn't left faded out under
+        // it. The selection stays where it was; the next press scrolls back to it.
+        if (!immediate && adapter.count > 0) grid.smoothScrollToPosition(0)
         crossfade(show = ambientHero, hide = appHero, immediate)
         smallClock.animate().alpha(0f).setDuration(if (immediate) 0 else FADE_MS).start()
         applyAmbientBackdrop()
@@ -219,8 +243,21 @@ class MainActivity : Activity() {
         } else {
             getString(R.string.never_opened)
         }
-        appBanner.setImageDrawable(app.image)
+        appBanner.showArt(app.image)
         app.backdrop?.let { backdrop.showImage(it, app.accent) }
+        if (movingIndex >= 0) appMeta.setText(R.string.move_hint)
+    }
+
+    /**
+     * Banners fill the 16:9 tile, cropping a little if they aren't quite 16:9 (YouTube TV's is about
+     * 4:3), rather than sitting between bars. Square icons, for apps without a banner, stay whole.
+     */
+    private fun ImageView.showArt(image: Drawable) {
+        val w = image.intrinsicWidth
+        val h = image.intrinsicHeight
+        val banner = w > 0 && h > 0 && w.toFloat() / h >= BANNER_MIN_ASPECT
+        scaleType = if (banner) ImageView.ScaleType.CENTER_CROP else ImageView.ScaleType.FIT_CENTER
+        setImageDrawable(image)
     }
 
     private fun crossfade(show: View, hide: View, immediate: Boolean) {
@@ -241,9 +278,11 @@ class MainActivity : Activity() {
 
     private fun animateTile(view: View, focused: Boolean) {
         val elevation = if (focused) 18 * resources.displayMetrics.density else 0f
+        // The app being moved sits lifted a little higher than a normal focused tile.
+        val scale = if (!focused) 1f else if (movingIndex >= 0) 1.18f else 1.1f
         view.animate()
-            .scaleX(if (focused) 1.1f else 1f)
-            .scaleY(if (focused) 1.1f else 1f)
+            .scaleX(scale)
+            .scaleY(scale)
             .translationZ(elevation)
             .setDuration(TILE_MS)
             .start()
@@ -319,7 +358,8 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 lastUsed = used
-                val selected = grid.selectedItemPosition
+                val selected = if (resetSelection) 0 else grid.selectedItemPosition
+                resetSelection = false
                 adapter.items = visible
                 empty.visibility = if (visible.isEmpty() && apps.isNotEmpty()) View.VISIBLE else View.GONE
                 if (visible.isNotEmpty()) grid.setSelection(selected.coerceIn(0, visible.size - 1))
@@ -341,16 +381,76 @@ class MainActivity : Activity() {
         }
     }
 
+    // --- Reordering ---------------------------------------------------------------------------
+
+    private fun startMove(position: Int) {
+        movingIndex = position
+        grid.requestFocus()
+        grid.setSelection(position)
+        showApp(adapter.getItem(position))
+        appMeta.setText(R.string.move_hint)
+        focusedTile?.animate()?.scaleX(1.18f)?.scaleY(1.18f)?.setDuration(TILE_MS)?.start()
+    }
+
+    /** While moving, the arrows carry the app through the grid and OK or Back drops it. */
+    private fun handleMoveKey(event: KeyEvent): Boolean {
+        val step = when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> -1
+            KeyEvent.KEYCODE_DPAD_RIGHT -> 1
+            KeyEvent.KEYCODE_DPAD_UP -> -grid.numColumns.coerceAtLeast(1)
+            KeyEvent.KEYCODE_DPAD_DOWN -> grid.numColumns.coerceAtLeast(1)
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BACK -> 0
+            else -> return false
+        }
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        if (step == 0) {
+            finishMove()
+            return true
+        }
+        val target = (movingIndex + step).coerceIn(0, adapter.count - 1)
+        if (target != movingIndex) {
+            adapter.move(movingIndex, target)
+            movingIndex = target
+            grid.setSelection(target)
+            // The selected view is rebound; re-apply the lifted look once it's laid out.
+            grid.post { grid.selectedView?.animate()?.scaleX(1.18f)?.scaleY(1.18f)?.setDuration(0)?.start() }
+        }
+        return true
+    }
+
+    private fun finishMove() {
+        movingIndex = -1
+        repo.saveOrder(adapter.items.map { it.packageName })
+        grid.selectedView?.let { animateTile(it, focused = true) }
+        val position = grid.selectedItemPosition
+        if (position >= 0) showApp(adapter.getItem(position))
+    }
+
+    private fun moveToFront(position: Int) {
+        adapter.move(position, 0)
+        repo.saveOrder(adapter.items.map { it.packageName })
+        grid.setSelection(0)
+    }
+
     private fun showAppMenu(app: AppEntry) {
+        val position = adapter.items.indexOf(app)
+        val options = arrayOf(
+            getString(R.string.move_app),
+            getString(R.string.move_to_front),
+            getString(R.string.hide_app),
+            getString(R.string.app_info),
+        )
         AlertDialog.Builder(this)
             .setTitle(app.label)
-            .setItems(arrayOf(getString(R.string.hide_app), getString(R.string.app_info))) { _, which ->
+            .setItems(options) { _, which ->
                 when (which) {
-                    0 -> {
+                    0 -> startMove(position)
+                    1 -> moveToFront(position)
+                    2 -> {
                         repo.setHidden(app.packageName, true)
                         reload()
                     }
-                    1 -> try {
+                    3 -> try {
                         startActivity(
                             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.packageName}"))
                         )
@@ -369,6 +469,10 @@ class MainActivity : Activity() {
                 notifyDataSetChanged()
             }
 
+        fun move(from: Int, to: Int) {
+            items = items.toMutableList().apply { add(to, removeAt(from)) }
+        }
+
         override fun getCount() = items.size
         override fun getItem(position: Int) = items[position]
         override fun getItemId(position: Int) = position.toLong()
@@ -378,7 +482,7 @@ class MainActivity : Activity() {
                 it.findViewById<View>(R.id.tile).clipToOutline = true
             }
             val app = items[position]
-            view.findViewById<ImageView>(R.id.icon).setImageDrawable(app.image)
+            view.findViewById<ImageView>(R.id.icon).showArt(app.image)
             view.findViewById<TextView>(R.id.label).text = app.label
             // Recycled views may still carry the focus animation from another position.
             if (view !== focusedTile) {
@@ -396,6 +500,8 @@ class MainActivity : Activity() {
         const val FADE_MS = 300L
         const val TILE_MS = 160L
         const val IDLE_MS = 30_000L
+        // Anything this wide is a banner; narrower art is an icon.
+        const val BANNER_MIN_ASPECT = 1.2f
         const val PERIODIC_MS = 10 * 60 * 1000L
         val DPAD_KEYS = setOf(
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,

@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The Fire TV app-list banner (320×180): FireFrontend's flame and wordmark. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
@@ -6,9 +7,16 @@
             <size android:width="320dp" android:height="180dp" />
         </shape>
     </item>
-    <item android:top="40dp" android:bottom="40dp" android:left="110dp" android:right="110dp">
-        <shape android:shape="oval">
-            <solid android:color="@color/focus" />
-        </shape>
-    </item>
+    <item
+        android:drawable="@drawable/flame"
+        android:top="62dp"
+        android:bottom="62dp"
+        android:left="22dp"
+        android:right="242dp" />
+    <item
+        android:drawable="@drawable/banner_wordmark"
+        android:top="70dp"
+        android:bottom="70dp"
+        android:left="94dp"
+        android:right="18dp" />
 </layer-list>
